@@ -644,3 +644,4 @@ end
 
 makeDraggable(titleBar, main)
 makeDraggable(openBtn, openBtn) -- the open button can be moved too
+ 
