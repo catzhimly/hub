@@ -13,6 +13,10 @@ local playerGui = player:WaitForChild("PlayerGui")
 local FULL_SIZE = UDim2.new(0.7, 0, 0.7, 0) -- 70% of the screen (max 800x600)
 local TITLE_HEIGHT = 34
 local MIN_SIZE = UDim2.new(0.7, 0, 0, TITLE_HEIGHT + 12)
+-- When enlarged, stay below the Roblox top bar (menu / chat icons) so nothing is covered
+local TOP_BAR = math.max(GuiService:GetGuiInset().Y, 58)
+local MAX_SIZE = UDim2.new(0.96, 0, 1, -(TOP_BAR + 14))   -- almost full screen
+local MAX_POSITION = UDim2.new(0.5, 0, 0, TOP_BAR + 4)     -- placed under the Roblox icons
 
 -- Helper to round corners
 local function round(obj, radius)
@@ -22,11 +26,14 @@ local function round(obj, radius)
 end
 
 -- ===== LIQUID GLASS HELPERS =====
+local mode = "normal"   -- "normal" = WindowUI2 style, "effects" = WindowUI style
+local effectParts = {}   -- everything that only shows in effects mode
 local edgeGradients = {} -- rotated every frame so the light slides around the edges
 local shimmers = {}       -- light streaks that sweep across the glass
 local blobs = {}          -- soft colored lights that drift behind the window
 
 RunService.RenderStepped:Connect(function(dt)
+	if mode ~= "effects" then return end
 	local now = os.clock()
 
 	for i = #edgeGradients, 1, -1 do
@@ -61,7 +68,7 @@ RunService.RenderStepped:Connect(function(dt)
 end)
 
 -- Makes an element look like liquid glass:
--- see-through body, glossy top highlight, and a prism-colored edge of light that moves
+-- see-through body, glossy top highlight, and a soft white edge
 local function glass(obj, bgTransparency, edgeTransparency, glossTransparency)
 	obj.BackgroundTransparency = bgTransparency
 
@@ -106,7 +113,9 @@ local function glass(obj, bgTransparency, edgeTransparency, glossTransparency)
 		g.BackgroundColor3 = color
 		g.BorderSizePixel = 0
 		g.Active = false
+		g.Visible = false
 		g.Parent = obj
+		table.insert(effectParts, g)
 
 		local gc = Instance.new("UICorner")
 		gc.CornerRadius = UDim.new(1, 0)
@@ -130,7 +139,9 @@ local function glass(obj, bgTransparency, edgeTransparency, glossTransparency)
 	shimmer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 	shimmer.BorderSizePixel = 0
 	shimmer.Active = false
+	shimmer.Visible = false
 	shimmer.Parent = obj
+	table.insert(effectParts, shimmer)
 
 	local shimmerCorner = Instance.new("UICorner")
 	shimmerCorner.CornerRadius = corner and corner.CornerRadius or UDim.new(0, 8)
@@ -150,7 +161,7 @@ local function glass(obj, bgTransparency, edgeTransparency, glossTransparency)
 	table.insert(shimmers, { grad = band, phase = math.random() * 4 })
 	end
 
-	-- glowing edge with rainbow-ish refraction colors
+	-- plain white glowing edge
 	local stroke = Instance.new("UIStroke")
 	stroke.Name = "GlassEdge"
 	stroke.Color = Color3.fromRGB(255, 255, 255)
@@ -172,7 +183,9 @@ local function glass(obj, bgTransparency, edgeTransparency, glossTransparency)
 		NumberSequenceKeypoint.new(0.5, 0.8),
 		NumberSequenceKeypoint.new(1, 0),
 	})
+	edge.Enabled = false
 	edge.Parent = stroke
+	table.insert(effectParts, edge)
 	table.insert(edgeGradients, edge)
 
 	-- easier to read on bright backgrounds
@@ -181,7 +194,7 @@ local function glass(obj, bgTransparency, edgeTransparency, glossTransparency)
 	end
 end
 
--- iPhone-style press: the glass squishes in and glows, then springs back with a ripple
+-- iPhone-style press: the glass squishes in and glows, then springs back, with a circle
 local function liquidClick(button, radius)
 	local scale = Instance.new("UIScale")
 	scale.Parent = button
@@ -191,6 +204,7 @@ local function liquidClick(button, radius)
 	clip.Size = UDim2.new(1, 0, 1, 0)
 	clip.BackgroundTransparency = 1
 	clip.ClipsDescendants = true
+	clip.Active = false
 	clip.Parent = button
 	round(clip, radius or 8)
 
@@ -202,7 +216,7 @@ local function liquidClick(button, radius)
 	local pressTween = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local springTween = TweenInfo.new(0.7, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out)
 	local fadeTween = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	local rippleTween = TweenInfo.new(0.7, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	local rippleTween = TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out) -- same click circle speed in both modes
 
 	local function release()
 		TweenService:Create(scale, springTween, { Scale = 1 }):Play()
@@ -225,7 +239,7 @@ local function liquidClick(button, radius)
 			TweenService:Create(stroke, pressTween, { Thickness = baseThick * 2.2, Transparency = 0.05 }):Play()
 		end
 
-		-- ripple that starts where you pressed
+		-- circle that starts where you pressed
 		local size = clip.AbsoluteSize
 		if size.X <= 0 or size.Y <= 0 then return end
 		local inset = GuiService:GetGuiInset()
@@ -240,6 +254,7 @@ local function liquidClick(button, radius)
 		ripple.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 		ripple.BackgroundTransparency = 0.45
 		ripple.BorderSizePixel = 0
+		ripple.Active = false
 		ripple.Parent = clip
 
 		local rc = Instance.new("UICorner")
@@ -290,6 +305,58 @@ glass(main, 0.4, 0.35, 0.88)
 local mainScale = Instance.new("UIScale") -- used for the pop open/close animation
 mainScale.Parent = main
 
+-- Circle when you click anywhere on the window (same as the button circle, but faster)
+local clickLayer = Instance.new("Frame")
+clickLayer.Name = "ClickCircle"
+clickLayer.Size = UDim2.new(1, 0, 1, 0)
+clickLayer.BackgroundTransparency = 1
+clickLayer.ClipsDescendants = true
+clickLayer.Active = false
+clickLayer.ZIndex = 100
+clickLayer.Parent = main
+round(clickLayer, 24)
+
+local windowCircleTween = TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.Out) -- circle speed: bigger number = slower
+
+main.InputBegan:Connect(function(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1
+		and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+
+	local size = clickLayer.AbsoluteSize
+	if size.X <= 0 or size.Y <= 0 then return end
+	local inset = GuiService:GetGuiInset()
+	local rel = Vector2.new(input.Position.X, input.Position.Y) + inset - clickLayer.AbsolutePosition
+	local px = math.clamp(rel.X / size.X, 0, 1)
+	local py = math.clamp(rel.Y / size.Y, 0, 1)
+
+	local circle = Instance.new("Frame")
+	circle.AnchorPoint = Vector2.new(0.5, 0.5)
+	circle.Position = UDim2.new(px, 0, py, 0)
+	circle.Size = UDim2.fromOffset(0, 0)
+	circle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	circle.BackgroundTransparency = 0.45
+	circle.BorderSizePixel = 0
+	circle.Active = false
+	circle.Parent = clickLayer
+
+	local cc = Instance.new("UICorner")
+	cc.CornerRadius = UDim.new(1, 0)
+	cc.Parent = circle
+
+	local d = math.max(size.X, size.Y) * 1.6
+	local t = TweenService:Create(circle, windowCircleTween, {
+		Size = UDim2.fromOffset(d, d),
+		BackgroundTransparency = 1,
+	})
+	t:Play()
+	t.Completed:Connect(function()
+		circle:Destroy()
+	end)
+end)
+
+
 -- Soft colored lights that float behind the glass (you see them through the panels)
 local lightHolder = Instance.new("Frame")
 lightHolder.Name = "LiquidLight"
@@ -297,7 +364,9 @@ lightHolder.Size = UDim2.new(1, 0, 1, 0)
 lightHolder.BackgroundTransparency = 1
 lightHolder.ClipsDescendants = true
 lightHolder.Active = false
+lightHolder.Visible = false
 lightHolder.Parent = main
+table.insert(effectParts, lightHolder)
 round(lightHolder, 24)
 
 local blobColors = {
@@ -351,7 +420,7 @@ round(titleBar, 17)
 glass(titleBar, 0.55, 0.5, 0.85)
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -90, 1, 0)
+title.Size = UDim2.new(1, -150, 1, 0)
 title.Position = UDim2.new(0, 16, 0, 0)
 title.BackgroundTransparency = 1
 title.Text = "小猫hub"
@@ -363,14 +432,14 @@ title.TextStrokeTransparency = 0.7
 title.Parent = titleBar
 
 -- Title bar buttons
-local function makeButton(text, xOffset, color)
+local function makeButton(text, xOffset, color, width, textSize)
 	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(0, 26, 0, 26)
+	b.Size = UDim2.new(0, width or 26, 0, 26)
 	b.Position = UDim2.new(1, xOffset, 0, 4)
 	b.BackgroundColor3 = color
 	b.Text = text
 	b.Font = Enum.Font.GothamBold
-	b.TextSize = 16
+	b.TextSize = textSize or 16
 	b.TextColor3 = Color3.fromRGB(255, 255, 255)
 	b.AutoButtonColor = true
 	b.Parent = titleBar
@@ -380,7 +449,8 @@ local function makeButton(text, xOffset, color)
 	return b
 end
 
-local minimizeBtn = makeButton("-", -64, Color3.fromRGB(230, 170, 50))
+local minimizeBtn = makeButton("-", -112, Color3.fromRGB(230, 170, 50))
+local maximizeBtn = makeButton("变大", -82, Color3.fromRGB(70, 150, 230), 44, 13) -- between minimize and close
 local closeBtn = makeButton("X", -34, Color3.fromRGB(220, 70, 70))
 
 -- Content area
@@ -422,6 +492,57 @@ pages.Parent = content
 round(pages, 18)
 glass(pages, 0.65, 0.6, 0.88)
 
+-- Circle when you click anywhere on the page area (same effect as the window click)
+local pageClickLayer = Instance.new("Frame")
+pageClickLayer.Name = "PageClickCircle"
+pageClickLayer.Size = UDim2.new(1, 0, 1, 0)
+pageClickLayer.BackgroundTransparency = 1
+pageClickLayer.ClipsDescendants = true
+pageClickLayer.Active = false
+pageClickLayer.ZIndex = 100
+pageClickLayer.Parent = pages
+round(pageClickLayer, 18)
+
+local function pageCircle(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1
+		and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+
+	local size = pageClickLayer.AbsoluteSize
+	if size.X <= 0 or size.Y <= 0 then return end
+	local inset = GuiService:GetGuiInset()
+	local rel = Vector2.new(input.Position.X, input.Position.Y) + inset - pageClickLayer.AbsolutePosition
+	local px = math.clamp(rel.X / size.X, 0, 1)
+	local py = math.clamp(rel.Y / size.Y, 0, 1)
+
+	local circle = Instance.new("Frame")
+	circle.AnchorPoint = Vector2.new(0.5, 0.5)
+	circle.Position = UDim2.new(px, 0, py, 0)
+	circle.Size = UDim2.fromOffset(0, 0)
+	circle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	circle.BackgroundTransparency = 0.45
+	circle.BorderSizePixel = 0
+	circle.Active = false
+	circle.Parent = pageClickLayer
+
+	local cc = Instance.new("UICorner")
+	cc.CornerRadius = UDim.new(1, 0)
+	cc.Parent = circle
+
+	local d = math.max(size.X, size.Y) * 1.6
+	local t = TweenService:Create(circle, windowCircleTween, {
+		Size = UDim2.fromOffset(d, d),
+		BackgroundTransparency = 1,
+	})
+	t:Play()
+	t.Completed:Connect(function()
+		circle:Destroy()
+	end)
+end
+
+pages.InputBegan:Connect(pageCircle)
+
 local ACTIVE_COLOR = Color3.fromRGB(60, 120, 220)
 local INACTIVE_COLOR = Color3.fromRGB(55, 55, 68)
 
@@ -436,6 +557,7 @@ local function makePage(name)
 	page.CanvasSize = UDim2.new(0, 0, 0, 0)
 	page.Visible = false
 	page.Parent = pages
+	page.InputBegan:Connect(pageCircle) -- ScrollingFrames block input, so hook them directly
 
 	local pad = Instance.new("UIPadding")
 	pad.PaddingTop = UDim.new(0, 12)
@@ -514,7 +636,8 @@ local function addToggle(page, text, default, callback)
 end
 
 -- Create the pages
-local mainPage = makePage("Main")
+local mainPage = makePage("主要功能")
+local settingsPage = makePage("设置")
 
 -- Tab switching
 local tabs = {}
@@ -545,20 +668,44 @@ local function addTab(name, page)
 	end)
 end
 
-addTab("Main", mainPage)
+addTab("主要功能", mainPage)
+addTab("设置", settingsPage)
 
 -- ===== MAIN PAGE: add your buttons here =====
-addButton(mainPage, "Button 1", function()
-	print("Button 1 clicked")
+addButton(mainPage, "按钮1", function()
+	print("按钮1 clicked")
 end)
-addButton(mainPage, "Button 2", function()
-	print("Button 2 clicked")
+addButton(mainPage, "按钮2", function()
+	print("按钮2 clicked")
 end)
-addButton(mainPage, "Button 3", function()
-	print("Button 3 clicked")
+addButton(mainPage, "按钮3", function()
+	print("按钮3 clicked")
 end)
 
-showPage("Main") -- default tab
+-- Mode buttons (on the 设置 page): 正常模式 = WindowUI2 effects, 特效模式 = WindowUI effects
+local modeButtons = {}
+
+local function setMode(m)
+	mode = m
+	for _, part in ipairs(effectParts) do
+		if part.Parent then
+			if part:IsA("UIGradient") then
+				part.Enabled = (m == "effects")
+			else
+				part.Visible = (m == "effects")
+			end
+		end
+	end
+	for name, btn in pairs(modeButtons) do
+		btn.BackgroundColor3 = (name == m) and Color3.fromRGB(50, 160, 90) or INACTIVE_COLOR
+	end
+end
+
+modeButtons.normal = addButton(settingsPage, "正常模式", function() setMode("normal") end)
+modeButtons.effects = addButton(settingsPage, "特效模式", function() setMode("effects") end)
+setMode("normal")
+
+showPage("主要功能") -- default tab
 
 -- Open button (shown when the window is closed)
 local openBtn = Instance.new("TextButton")
@@ -578,19 +725,139 @@ liquidClick(openBtn, 19)
 
 -- Minimize / close / open logic
 local minimized = false
+local maximized = false
+local fullSize = FULL_SIZE          -- size the window returns to when un-minimized
+local normalPosition = main.Position
 local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local sizeTween = TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+local normalSize = FULL_SIZE        -- size to go back to after 变大 / 还原
+local customSize = false            -- true once you have resized the window yourself
 
-minimizeBtn.MouseButton1Click:Connect(function()
-	minimized = not minimized
+-- ===== Resize handle (bottom-right corner): drag it to change the window size =====
+local MIN_W, MIN_H = 300, 200
+
+local resizeHandle = Instance.new("TextButton")
+resizeHandle.Name = "ResizeHandle"
+resizeHandle.AnchorPoint = Vector2.new(1, 1)
+resizeHandle.Size = UDim2.fromOffset(28, 28)
+resizeHandle.Position = UDim2.new(1, -2, 1, -2)
+resizeHandle.BackgroundTransparency = 1
+resizeHandle.Text = ""
+resizeHandle.AutoButtonColor = false
+resizeHandle.ZIndex = 102
+resizeHandle.Parent = main
+
+-- three little diagonal lines as the grip icon
+for _, grip in ipairs({ { 9, 8 }, { 15, 14 }, { 21, 20 } }) do
+	local line = Instance.new("Frame")
+	line.AnchorPoint = Vector2.new(0.5, 0.5)
+	line.Position = UDim2.new(1, -grip[1], 1, -grip[1])
+	line.Size = UDim2.fromOffset(grip[2], 2)
+	line.Rotation = -45
+	line.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	line.BackgroundTransparency = 0.35
+	line.BorderSizePixel = 0
+	line.Active = false
+	line.ZIndex = 103
+	line.Parent = resizeHandle
+	round(line, 1)
+end
+
+local function updateHandle()
+	resizeHandle.Visible = not minimized and not maximized
+end
+
+local resizing = false
+local rStart, rStartSize, rStartPos, rMaxW, rMaxH
+
+resizeHandle.InputBegan:Connect(function(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1
+		and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+	if minimized or maximized then return end
+
+	resizing = true
+	rStart = input.Position
+	rStartSize = main.AbsoluteSize
+	rStartPos = main.Position
+	-- can grow until the edge of the screen
+	rMaxW = math.max(MIN_W, gui.AbsoluteSize.X - main.AbsolutePosition.X - 10)
+	rMaxH = math.max(MIN_H, gui.AbsoluteSize.Y - main.AbsolutePosition.Y - 10)
+
+	input.Changed:Connect(function()
+		if input.UserInputState == Enum.UserInputState.End then
+			resizing = false
+		end
+	end)
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not resizing then return end
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement
+		and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+
+	local delta = input.Position - rStart
+	local w = math.clamp(rStartSize.X + delta.X, MIN_W, rMaxW)
+	local h = math.clamp(rStartSize.Y + delta.Y, MIN_H, rMaxH)
+
+	customSize = true
+	sizeLimit.MaxSize = Vector2.new(math.huge, math.huge) -- the 800x600 limit no longer applies
+	fullSize = UDim2.fromOffset(w, h)
+	main.Size = fullSize
+	-- window is centered on its X anchor, so shift it to keep the top-left corner fixed
+	main.Position = UDim2.new(
+		rStartPos.X.Scale, rStartPos.X.Offset + (w - rStartSize.X) / 2,
+		rStartPos.Y.Scale, rStartPos.Y.Offset
+	)
+end)
+
+local function currentMinSize()
+	return UDim2.new(fullSize.X.Scale, fullSize.X.Offset, 0, TITLE_HEIGHT + 12)
+end
+
+local function setMinimized(state)
+	minimized = state
+	updateHandle()
 	if minimized then
 		content.Visible = false
 		minimizeBtn.Text = "+"
-		TweenService:Create(main, tweenInfo, { Size = MIN_SIZE }):Play()
+		TweenService:Create(main, tweenInfo, { Size = currentMinSize() }):Play()
 	else
 		minimizeBtn.Text = "-"
-		TweenService:Create(main, tweenInfo, { Size = FULL_SIZE }):Play()
+		TweenService:Create(main, tweenInfo, { Size = fullSize }):Play()
 		task.delay(0.2, function()
 			if not minimized then content.Visible = true end
+		end)
+	end
+end
+
+minimizeBtn.MouseButton1Click:Connect(function()
+	setMinimized(not minimized)
+end)
+
+-- 变大: window becomes almost the whole screen (press again to go back)
+maximizeBtn.MouseButton1Click:Connect(function()
+	maximized = not maximized
+	updateHandle()
+	if maximized then
+		normalPosition = main.Position
+		normalSize = fullSize
+		fullSize = MAX_SIZE
+		sizeLimit.MaxSize = Vector2.new(math.huge, math.huge) -- remove the 800x600 limit
+		maximizeBtn.Text = "还原"
+		TweenService:Create(main, sizeTween, { Size = minimized and currentMinSize() or fullSize, Position = MAX_POSITION }):Play()
+	else
+		fullSize = normalSize
+		maximizeBtn.Text = "变大"
+		local t = TweenService:Create(main, sizeTween, { Size = minimized and currentMinSize() or fullSize, Position = normalPosition })
+		t:Play()
+		t.Completed:Connect(function()
+			if not maximized and not customSize then
+				sizeLimit.MaxSize = Vector2.new(800, 600) -- put the limit back
+			end
 		end)
 	end
 end)
@@ -644,4 +911,3 @@ end
 
 makeDraggable(titleBar, main)
 makeDraggable(openBtn, openBtn) -- the open button can be moved too
- 
