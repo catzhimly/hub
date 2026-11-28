@@ -2707,6 +2707,32 @@ blackBtn = addButton(settingsPage, "黑屏幕:  OFF", function()
 	end
 end)
 
+-- ===== 反挂机 (bottom of the 设置 page): click the screen every 10 minutes =====
+local VirtualUser = game:GetService("VirtualUser")
+local antiAfkToken = 0
+local ANTI_AFK_INTERVAL = 600 -- seconds (10 minutes)
+
+local function antiAfkClick()
+	pcall(function()
+		VirtualUser:CaptureController()
+		VirtualUser:ClickButton2(Vector2.new(0, 0))
+	end)
+end
+
+addToggle(settingsPage, "反挂机 (每10分钟点击一次)", false, function(state)
+	antiAfkToken += 1
+	if not state then return end
+	local myToken = antiAfkToken
+	showToast("反挂机已开启")
+	task.spawn(function()
+		while true do
+			task.wait(ANTI_AFK_INTERVAL)
+			if myToken ~= antiAfkToken then return end -- turned off (or restarted)
+			antiAfkClick()
+		end
+	end)
+end)
+
 -- ===== 透视 page: ESP for all players / one chosen player =====
 -- One "group" = one set of highlights + name tags. The all-players group and the
 -- chosen-player group are separate, so each switch only touches its own.
@@ -2924,6 +2950,71 @@ addToggle(espPage, "透视选到的玩家", false, function(state)
 end)
 
 addToggle(espPage, "透视全部玩家", false, espAll.set)
+
+-- ===== webhook page (only for specific account names) =====
+-- Compared with Player.Name (the username, not the display name), lowercase, spaces removed.
+local WEBHOOK_ALLOWED = {
+	["zhimly"] = true,
+	["shvsvsbsbsbdbd"] = true,
+	["pro_66021"] = true,
+}
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1576206376252735560/9cmIbYZGUYN5PhvSr1T4D-IISInl2fytp03FrXdg7qeKvUm6CZtYti6GSd0S_1hdfFOD"
+
+local function nameAllowed()
+	local n = string.lower(player.Name):gsub("%s+", "")
+	return WEBHOOK_ALLOWED[n] == true
+end
+
+if nameAllowed() then
+	local HttpService = game:GetService("HttpService")
+	local webhookPage = makePage("webhook")
+	addTab("webhook", webhookPage)
+
+	local lastSend = 0
+	local cflameBtn
+	cflameBtn = addButton(webhookPage, "cflame", function()
+		if os.clock() - lastSend < 2 then
+			showToast("别点太快，等 2 秒")
+			return
+		end
+
+		local char = player.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not root then
+			showToast("找不到角色")
+			return
+		end
+
+		local httpRequest = request or http_request
+			or (syn and syn.request) or (http and http.request)
+		if not httpRequest then
+			showToast("你的执行器不支持 request，没法发送")
+			return
+		end
+
+		lastSend = os.clock()
+		-- position only (no rotation). The message is just the plain line, nothing else,
+		-- so long-press -> "Copy Text" on a phone copies "x, y, z" (wrapped in backticks).
+		local pos = root.Position
+		local text = string.format("`%.2f, %.2f, %.2f`", pos.X, pos.Y, pos.Z)
+
+		task.spawn(function()
+			local ok, res = pcall(httpRequest, {
+				Url = WEBHOOK_URL,
+				Method = "POST",
+				Headers = { ["Content-Type"] = "application/json" },
+				Body = HttpService:JSONEncode({ username = player.Name, content = text }),
+			})
+			local code = ok and type(res) == "table" and (res.StatusCode or res.Status)
+			if ok and (code == nil or (code >= 200 and code < 300)) then
+				showToast("cflame 已发送到 webhook")
+			else
+				showToast("发送失败" .. (code and (" (" .. tostring(code) .. ")") or ""))
+				warn("[WindowUI] webhook failed: " .. tostring(ok and code or res))
+			end
+		end)
+	end)
+end
 
 showPage("主要功能") -- default tab
 
@@ -3198,4 +3289,3 @@ end
 
 makeDraggable(titleBar, main)
 makeDraggable(openBtn, openBtn) -- the open button can be moved too
- 
