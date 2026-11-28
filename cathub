@@ -32,8 +32,10 @@ local edgeGradients = {} -- rotated every frame so the light slides around the e
 local shimmers = {}       -- light streaks that sweep across the glass
 local blobs = {}          -- soft colored lights that drift behind the window
 
+local windowShown = true -- set to false while the window is closed
+
 RunService.RenderStepped:Connect(function(dt)
-	if mode ~= "effects" then return end
+	if mode ~= "effects" or not windowShown then return end
 	local now = os.clock()
 
 	for i = #edgeGradients, 1, -1 do
@@ -195,27 +197,28 @@ local function glass(obj, bgTransparency, edgeTransparency, glossTransparency)
 end
 
 -- iPhone-style press: the glass squishes in and glows, then springs back, with a circle
-local function liquidClick(button, radius)
+-- fast = true gives a snappier version (used for the - / 变大 / X title buttons)
+local function liquidClick(button, radius, fast)
 	local scale = Instance.new("UIScale")
 	scale.Parent = button
 
-	local clip = Instance.new("CanvasGroup") -- CanvasGroup + UICorner = ripple stays inside the round shape
-	clip.Name = "Ripples"
-	clip.Size = UDim2.new(1, 0, 1, 0)
-	clip.BackgroundTransparency = 1
-	clip.Active = false
-	clip.Parent = button
-	round(clip, radius or 8)
+	-- the clipping layer for the circle only exists while a circle is playing
+	-- (an idle CanvasGroup on every button costs frame time)
+	local clip = nil
+	local activeRipples = 0
 
 	local stroke = button:FindFirstChild("GlassEdge")
 	local baseBg = button.BackgroundTransparency
 	local baseEdge = stroke and stroke.Transparency or 0.5
 	local baseThick = stroke and stroke.Thickness or 1.5
 
-	local pressTween = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	local springTween = TweenInfo.new(0.7, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out)
-	local fadeTween = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	local rippleTween = TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out) -- same click circle speed in both modes
+	local pressScale = fast and 0.94 or 0.9
+	local pressTween = TweenInfo.new(fast and 0.05 or 0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local springTween = fast
+		and TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		or TweenInfo.new(0.7, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out)
+	local fadeTween = TweenInfo.new(fast and 0.12 or 0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local rippleTween = TweenInfo.new(fast and 0.3 or 1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 
 	local function release()
 		TweenService:Create(scale, springTween, { Scale = 1 }):Play()
@@ -232,19 +235,31 @@ local function liquidClick(button, radius)
 		end
 
 		-- squish + glow
-		TweenService:Create(scale, pressTween, { Scale = 0.9 }):Play()
+		TweenService:Create(scale, pressTween, { Scale = pressScale }):Play()
 		TweenService:Create(button, pressTween, { BackgroundTransparency = math.max(baseBg - 0.25, 0) }):Play()
 		if stroke then
 			TweenService:Create(stroke, pressTween, { Thickness = baseThick * 2.2, Transparency = 0.05 }):Play()
 		end
 
 		-- circle that starts where you pressed
-		local size = clip.AbsoluteSize
+		local size = button.AbsoluteSize
 		if size.X <= 0 or size.Y <= 0 then return end
 		local inset = GuiService:GetGuiInset()
-		local rel = Vector2.new(input.Position.X, input.Position.Y) + inset - clip.AbsolutePosition
+		local rel = Vector2.new(input.Position.X, input.Position.Y) + inset - button.AbsolutePosition
 		local px = math.clamp(rel.X / size.X, 0, 1)
 		local py = math.clamp(rel.Y / size.Y, 0, 1)
+
+		if not clip then
+			clip = Instance.new("CanvasGroup") -- CanvasGroup + UICorner = circle stays inside the round shape
+			clip.Name = "Ripples"
+			clip.Size = UDim2.new(1, 0, 1, 0)
+			clip.BackgroundTransparency = 1
+			clip.Active = false
+			clip.Parent = button
+			round(clip, radius or 8)
+		end
+		local myClip = clip
+		activeRipples += 1
 
 		local ripple = Instance.new("Frame")
 		ripple.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -254,7 +269,7 @@ local function liquidClick(button, radius)
 		ripple.BackgroundTransparency = 0.45
 		ripple.BorderSizePixel = 0
 		ripple.Active = false
-		ripple.Parent = clip
+		ripple.Parent = myClip
 
 		local rc = Instance.new("UICorner")
 		rc.CornerRadius = UDim.new(1, 0)
@@ -268,6 +283,11 @@ local function liquidClick(button, radius)
 		t:Play()
 		t.Completed:Connect(function()
 			ripple:Destroy()
+			activeRipples -= 1
+			if activeRipples <= 0 and clip == myClip then
+				clip = nil
+				myClip:Destroy()
+			end
 		end)
 	end)
 
@@ -305,7 +325,8 @@ local mainScale = Instance.new("UIScale") -- used for the pop open/close animati
 mainScale.Parent = main
 
 -- Circle when you click anywhere on the window (same as the button circle, but faster)
-local clickLayer = Instance.new("CanvasGroup")
+local clickLayer = Instance.new("Frame") -- clipping Frame, much cheaper than a CanvasGroup
+clickLayer.ClipsDescendants = true
 clickLayer.Name = "ClickCircle"
 clickLayer.Size = UDim2.new(1, 0, 1, 0)
 clickLayer.BackgroundTransparency = 1
@@ -443,7 +464,7 @@ local function makeButton(text, xOffset, color, width, textSize)
 	b.Parent = titleBar
 	round(b, 13)
 	glass(b, 0.3, 0.4, 0.8)
-	liquidClick(b, 13)
+	liquidClick(b, 13, true) -- fast click effect for the title bar buttons
 	return b
 end
 
@@ -547,7 +568,8 @@ round(pages, 18)
 glass(pages, 0.65, 0.6, 0.88)
 
 -- Circle when you click anywhere on the page area (same effect as the window click)
-local pageClickLayer = Instance.new("CanvasGroup")
+local pageClickLayer = Instance.new("Frame") -- clipping Frame, much cheaper than a CanvasGroup
+pageClickLayer.ClipsDescendants = true
 pageClickLayer.Name = "PageClickCircle"
 pageClickLayer.Size = UDim2.new(1, 0, 1, 0)
 pageClickLayer.BackgroundTransparency = 1
@@ -639,6 +661,38 @@ local function makePage(name)
 	return page
 end
 
+-- Reliable click: the press animation shrinks the button, which can make the normal
+-- MouseButton1Click get lost near the edge. So a click is also accepted when the press
+-- and the release happen at (almost) the same spot. A short debounce stops double fires.
+local function onClick(button, fn)
+	local startPos
+	local lastFire = 0
+	local function fire()
+		local now = os.clock()
+		if now - lastFire < 0.25 then return end
+		lastFire = now
+		fn()
+	end
+	local function isPress(input)
+		return input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+	end
+	button.InputBegan:Connect(function(input)
+		if isPress(input) then
+			startPos = Vector2.new(input.Position.X, input.Position.Y)
+		end
+	end)
+	button.InputEnded:Connect(function(input)
+		if startPos and isPress(input) then
+			local endPos = Vector2.new(input.Position.X, input.Position.Y)
+			local moved = (endPos - startPos).Magnitude
+			startPos = nil
+			if moved <= 14 then fire() end -- a drag (scrolling the page) is not a click
+		end
+	end)
+	button.MouseButton1Click:Connect(fire)
+end
+
 -- A normal clickable button inside a page
 local function addButton(page, text, callback)
 	local b = Instance.new("TextButton")
@@ -653,8 +707,11 @@ local function addButton(page, text, callback)
 	round(b, 18)
 	glass(b, 0.45, 0.45, 0.78)
 	liquidClick(b, 18)
-	b.MouseButton1Click:Connect(function()
-		if callback then callback() end
+	onClick(b, function()
+		if callback then
+			local ok, err = pcall(callback)
+			if not ok then warn("[WindowUI] button error: " .. tostring(err)) end
+		end
 	end)
 	return b
 end
@@ -680,10 +737,17 @@ local function addToggle(page, text, default, callback)
 	end
 	refresh()
 
-	b.MouseButton1Click:Connect(function()
+	onClick(b, function()
 		state = not state
 		refresh()
-		if callback then callback(state) end
+		if callback then
+			local ok, err = pcall(callback, state)
+			if not ok then
+				state = not state -- the action failed, so the switch goes back
+				refresh()
+				warn("[WindowUI] toggle error (" .. text .. "): " .. tostring(err))
+			end
+		end
 	end)
 	return b
 end
@@ -2925,8 +2989,8 @@ selectBtn = addButton(espPage, "选服务器玩家: 未选择", function()
 	end
 	playerList.Visible = not playerList.Visible
 end)
-playerList.LayoutOrder = #espPage:GetChildren()
 playerList.Parent = espPage
+playerList.LayoutOrder = #espPage:GetChildren()
 
 -- auto refresh when somebody joins / leaves
 Players.PlayerAdded:Connect(function()
@@ -3106,8 +3170,8 @@ local minimized = false
 local maximized = false
 local fullSize = FULL_SIZE          -- size the window returns to when un-minimized
 local normalPosition = main.Position
-local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local sizeTween = TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+local tweenInfo = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local sizeTween = TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 local normalSize = FULL_SIZE        -- size to go back to after 变大 / 还原
 local customSize = false            -- true once you have resized the window yourself
 
@@ -3206,7 +3270,7 @@ local function setMinimized(state)
 	else
 		minimizeBtn.Text = "-"
 		TweenService:Create(main, tweenInfo, { Size = fullSize }):Play()
-		task.delay(0.2, function()
+		task.delay(0.12, function()
 			if not minimized then content.Visible = true end
 		end)
 	end
@@ -3241,10 +3305,11 @@ maximizeBtn.MouseButton1Click:Connect(function()
 end)
 
 closeBtn.MouseButton1Click:Connect(function()
-	local t = TweenService:Create(mainScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.85 })
+	local t = TweenService:Create(mainScale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.85 })
 	t:Play()
 	t.Completed:Wait()
 	main.Visible = false
+	windowShown = false
 	mainScale.Scale = 1
 	openBtn.Visible = true
 end)
@@ -3253,7 +3318,8 @@ openBtn.MouseButton1Click:Connect(function()
 	openBtn.Visible = false
 	mainScale.Scale = 0.85
 	main.Visible = true
-	TweenService:Create(mainScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	windowShown = true
+	TweenService:Create(mainScale, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 end)
 
 -- Dragging (works with mouse and touch)
